@@ -374,6 +374,97 @@ export const authConfig = {
           // user.create.after and session creation.
           if (!userCtx) {
             try {
+              // 1. Check if user is global superadmin
+              const user = await prisma.user.findUnique({
+                where: { id: session.userId },
+                select: { role: true },
+              });
+
+              if (user?.role === "superadmin") {
+                const superadminOrg = await prisma.organization.findUnique({
+                  where: { slug: "superadmin" },
+                  select: { id: true },
+                });
+
+                if (superadminOrg) {
+                  const orgRole = await prisma.organizationRole.findFirst({
+                    where: {
+                      organizationId: superadminOrg.id,
+                      role: "superadmin",
+                    },
+                    select: { id: true },
+                  });
+
+                  await prisma.userContext.upsert({
+                    where: {
+                      userId: session.userId,
+                    },
+                    update: {
+                      activeOrganizationId: superadminOrg.id,
+                      activeRoleId: orgRole?.id ?? null,
+                    },
+                    create: {
+                      userId: session.userId,
+                      activeOrganizationId: superadminOrg.id,
+                      activeRoleId: orgRole?.id ?? null,
+                    },
+                  });
+
+                  return {
+                    data: {
+                      ...session,
+                      activeOrganizationId: superadminOrg.id,
+                    },
+                  };
+                }
+              }
+
+              // 2. Find existing memberships
+              const firstMembership = await prisma.member.findFirst({
+                where: { userId: session.userId },
+                orderBy: { createdAt: "asc" },
+                select: {
+                  organizationId: true,
+                  role: true,
+                },
+              });
+
+              // User already belongs to an organization
+              if (firstMembership) {
+                const roles = firstMembership.role
+                  .split(",")
+                  .map((r) => r.trim())
+                  .filter(Boolean);
+                const orgRole = await prisma.organizationRole.findFirst({
+                  where: {
+                    organizationId: firstMembership.organizationId,
+                    role: { in: roles },
+                  },
+                  select: { id: true },
+                });
+                await prisma.userContext.upsert({
+                  where: {
+                    userId: session.userId,
+                  },
+                  update: {
+                    activeOrganizationId: firstMembership.organizationId,
+                    activeRoleId: orgRole?.id ?? null,
+                  },
+                  create: {
+                    userId: session.userId,
+                    activeOrganizationId: firstMembership.organizationId,
+                    activeRoleId: orgRole?.id ?? null,
+                  },
+                });
+                return {
+                  data: {
+                    ...session,
+                    activeOrganizationId: firstMembership.organizationId,
+                  },
+                };
+              }
+
+              // 3. Otherwise execute existing "new signup" logic (for drgodly)
               const org = await prisma.organization.findUnique({
                 where: { slug: "drgodly" },
                 select: { id: true },
@@ -428,10 +519,32 @@ export const authConfig = {
                   return {
                     data: { ...session, activeOrganizationId: org.id },
                   };
+                } else {
+                  // Already a member of drgodly (but somehow userCtx is null)
+                  await prisma.userContext.upsert({
+                    where: {
+                      userId: session.userId,
+                    },
+                    update: {
+                      activeOrganizationId: org.id,
+                      activeRoleId: patientOrgRole?.id ?? null,
+                    },
+                    create: {
+                      userId: session.userId,
+                      activeOrganizationId: org.id,
+                      activeRoleId: patientOrgRole?.id ?? null,
+                    },
+                  });
+                  return {
+                    data: { ...session, activeOrganizationId: org.id },
+                  };
                 }
               }
-            } catch {
-              // Don't block session creation if org setup fails
+            } catch (error) {
+              console.error(
+                "Failed to setup session/user context in hook:",
+                error,
+              );
             }
 
             return {
