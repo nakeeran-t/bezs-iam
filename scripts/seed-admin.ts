@@ -13,10 +13,13 @@ import { Pool } from "pg";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { randomUUID } from "crypto";
+import "dotenv/config"; // import dotenv to load environment variables from .env file
 
 // ------------------------------------------------------------------ //
 // Database
 // ------------------------------------------------------------------ //
+
+// console.log("DATABASE_URL:", process.env.DATABASE_URL);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL ?? "" });
 const adapter = new PrismaPg(pool);
